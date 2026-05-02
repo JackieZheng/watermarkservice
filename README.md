@@ -1,6 +1,7 @@
 ﻿# ExplorerWatermarkService
 
 Monitor explorer.exe restart and auto clear Win11 desktop watermark.
+Base https://github.com/machineonamission/uwd2
 
 ## Quick Start
 
