@@ -1,0 +1,5 @@
+﻿{
+    "targetExe":  "ClearWinWatermark.exe",
+    "logMaxLines":  2000,
+    "checkInterval":  3
+}
