@@ -1,0 +1,37 @@
+# 运行期日志（含本机路径，不进版本库）
+log/*.log
+log/*.txt
+!log/.gitkeep
+
+# 配置备份
+*.bak
+*.bak.*
+bin/config.json.bak.*
+
+# Python / 编辑器产物
+__pycache__/
+*.pyc
+*.pyo
+.vscode/
+.idea/
+
+# 临时文件
+*.tmp
+*.swp
+*~
+
+# 产品口径：开发 / 测试内容不随仓库发布（用户约定）
+devlog.md
+docs/
+_bench_*
+_debug_*
+_demo_*
+_probe_*
+_selftest_*
+_test_*
+test_*
+*_check.py
+*_debug.py
+*_probe.py
+*_test.py
+*_tests.py

@@ -1,0 +1,5 @@
+{
+    "targetExe":  "../bin/clear-watermark.cmd",
+    "logMaxLines":  2000,
+    "checkInterval":  3
+}
