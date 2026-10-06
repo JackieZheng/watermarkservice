@@ -53,24 +53,57 @@ $ErrorActionPreference = 'Continue'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 try { $OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
-# ---- 启动后自动隐藏控制台窗口 --------------------------------------------
-# 由计划任务 / 登录启动项拉起时本来就没有窗口；但若从可视化控制台启动
-# （双击某个 .cmd、或安装脚本用 WMI 拉起），会留下一个窗口占着桌面。
-# 这里在启动后立刻把本进程的控制台窗口隐藏掉 —— 用户看不到、也不会残留。
-try {
-    if (-not ('Uwd2Win.ConsoleHost' -as [type])) {
-        Add-Type -Namespace Uwd2Win -Name ConsoleHost -MemberDefinition @'
+# ---- 控制台窗口与气泡提示（仅交互会话；服务形态自动跳过） -------------------
+# 服务形态（nssm / session 0）：没有控制台窗口、没有托盘，整个 UI 块跳过，
+# 这正是「跟 watermarkservice 一样完全没有窗口」的来源。
+# 交互形态（登录启动项 / 手动拉起）：立刻隐藏窗口 + 弹气泡告知已常驻。
+# ⚠️ 手动点 × 关窗口会把 monitor 进程一起杀掉（控制台窗口关闭=进程终止），
+#    所以自动收起必须走 SW_HIDE「隐藏」而不是退出。
+# 收起动作带重试（0s/5s/5s），覆盖个别启动路径下第一次隐藏未生效的情况。
+# 实现放后台 STA runspace：NotifyIcon 气泡需要 STA 线程；且不阻塞监控主循环。
+if ([Environment]::UserInteractive) {
+    try {
+        if (-not ('Uwd2Win.ConsoleHost' -as [type])) {
+            Add-Type -Namespace Uwd2Win -Name ConsoleHost -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("kernel32.dll")]
 public static extern System.IntPtr GetConsoleWindow();
 [System.Runtime.InteropServices.DllImport("user32.dll")]
 public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
 '@ -ErrorAction Stop
-    }
-    $hWnd = [Uwd2Win.ConsoleHost]::GetConsoleWindow()
-    if ($hWnd -ne [System.IntPtr]::Zero) {
-        [void][Uwd2Win.ConsoleHost]::ShowWindow($hWnd, 0)   # 0 = SW_HIDE
-    }
-} catch { }
+        }
+        $rs = [runspacefactory]::CreateRunspace()
+        $rs.ApartmentState = 'STA'
+        $rs.Open()
+        $bg = [powershell]::Create()
+        $bg.Runspace = $rs
+        $null = $bg.AddScript({
+            # ① 气泡提示：一眼确认监控已常驻（失败静默，不影响监控）
+            try {
+                Add-Type -AssemblyName System.Windows.Forms
+                Add-Type -AssemblyName System.Drawing
+                $ni = New-Object System.Windows.Forms.NotifyIcon
+                $ni.Icon = [System.Drawing.SystemIcons]::Information
+                $ni.Visible = $true
+                $ni.ShowBalloonTip(5000, "$env:COMPUTERNAME · Win11 水印清除已启动",
+                    '监控已常驻：explorer 重启后会自动重新去水印。此提示 5 秒后自动消失。',
+                    [System.Windows.Forms.ToolTipIcon]::Info)
+                Start-Sleep -Seconds 6
+                $ni.Visible = $false
+                $ni.Dispose()
+            } catch { }
+            # ② 收起控制台窗口（隐藏，不是退出；带重试）
+            try {
+                foreach ($delay in 0, 5, 5) {
+                    Start-Sleep -Seconds $delay
+                    $h = [Uwd2Win.ConsoleHost]::GetConsoleWindow()
+                    if ($h -ne [System.IntPtr]::Zero) {
+                        [void][Uwd2Win.ConsoleHost]::ShowWindow($h, 0)   # 0 = SW_HIDE
+                    }
+                }
+            } catch { }
+        }).BeginInvoke()
+    } catch { }
+}
 
 $baseDir = Split-Path $PSScriptRoot -Parent
 # 载体名从安装目录名派生，避免在日志里写死某个产品名：

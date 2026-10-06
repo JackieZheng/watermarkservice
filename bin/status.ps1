@@ -5,7 +5,8 @@
 
 .DESCRIPTION
   本脚本不假设自己属于哪个部署，而是**探测本机实际存在的载体**：
-    [A]  Windows 服务 $ServiceName（默认 ExplorerWatermarkService，NSSM 托管，开机自启）
+    [A]  Windows 服务：自动发现所有「命令行里调用了 monitor.ps1」的服务
+         （nssm 托管、开机自启；各部署服务名不同，不写死）
     [B1] 任何「动作里调用了 monitor.ps1」的计划任务（当前用户，登录触发；注册需管理员）
     [B2] HKCU 登录启动项里任何「调用了 monitor.ps1」的值（B1 的免管理员替代载体）
   按「谁调用了 monitor.ps1」探测，不写死任何载体名；哪个存在就报告哪个，
@@ -32,7 +33,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $ServiceName = "ExplorerWatermarkService",
+    # 留空 = 自动发现所有「命令行里调用了 monitor.ps1」的 Windows 服务
+    [string] $ServiceName = "",
     # 留空 = 自动探测「动作里调用了 monitor.ps1」的计划任务与登录启动项
     [string] $TaskName    = "",
     [string] $Target      = "$env:SystemRoot\System32\shell32.dll",
@@ -97,19 +99,33 @@ Write-Host ("Python   : {0}" -f $(if ($python) { $python } else { '(未找到，
 # ---------------------------------------------------------------- 1. 载体
 Section "1. 载体（谁是触发者）"
 
-# [A] 服务
-$svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($svc) {
-    $cim = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
-    if ($cim) { $svcPid = $cim.ProcessId }
-    $extra = if ($cim) { "  StartName=$($cim.StartName)  pid=$($cim.ProcessId)" } else { "" }
-    Write-Host ("[A] 服务 {0,-32} : {1}{2}" -f $ServiceName, $svc.Status, $extra)
-    if ($cim -and $cim.StartName -eq 'LocalSystem') {
-        Write-Host "    提示：LocalSystem/session 0 没有交互桌面，exe 最后一步「刷新桌面」必然失败" -ForegroundColor DarkGray
-        Write-Host "          （退出码 101）—— 但注入已完成，守卫脚本会复核内存并判定成功。" -ForegroundColor DarkGray
+# [A] 服务：自动发现所有「ImagePath/命令行里调用了 monitor.ps1」的 Windows 服务，
+#     不写死服务名（各部署的服务名不同）；显式传 -ServiceName 时额外兼容旧式检查。
+$svcs = @()
+try {
+    $svcs = @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object {
+        $_.PathName -and ($_.PathName -like '*monitor.ps1*')
+    })
+} catch { }
+if ($ServiceName -and -not ($svcs | Where-Object { $_.Name -eq $ServiceName })) {
+    $named = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
+    if ($named) { $svcs += $named }
+}
+if ($svcs) {
+    foreach ($s in $svcs) {
+        $svcObj = Get-Service -Name $s.Name -ErrorAction SilentlyContinue
+        $extra = "  StartName=$($s.StartName)  pid=$($s.ProcessId)"
+        $mine = if ($s.PathName -like "*$BaseDir*") { "  <- 本套" } else { "" }
+        Write-Host ("[A] 服务 {0,-32} : {1}{2}{3}" -f $s.Name, $(if ($svcObj) { $svcObj.Status } else { $s.State }), $extra, $mine) -ForegroundColor Green
+        if ($s.StartName -eq 'LocalSystem') {
+            Write-Host "    提示：LocalSystem/session 0 没有交互桌面，exe 最后一步「刷新桌面」必然失败" -ForegroundColor DarkGray
+            Write-Host "          （退出码 101）—— 但注入已完成，守卫脚本会复核内存并判定成功。" -ForegroundColor DarkGray
+        }
+        # 后面父子进程判定用的 svcPid：优先取「本套」服务，否则取第一个
+        if ($null -eq $svcPid -or $s.PathName -like "*$BaseDir*") { $svcPid = $s.ProcessId }
     }
 } else {
-    Write-Host ("[A] 服务 {0,-32} : 未安装" -f $ServiceName) -ForegroundColor DarkGray
+    Write-Host "[A] 服务 : 未安装（没有任何命令行调用 monitor.ps1 的 Windows 服务）" -ForegroundColor DarkGray
 }
 
 # [B] 计划任务：按「动作里是否调用 monitor.ps1」探测，不写死任何任务名
